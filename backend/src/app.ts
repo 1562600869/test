@@ -4,7 +4,6 @@ import { existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import menuRoutes from './routes/menu'
 import orderRoutes from './routes/orders'
-import { getDatabase } from './config/database'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -38,22 +37,10 @@ app.use((req: Request, res: Response) => {
   res.status(404).json({ error: 'Not found' })
 })
 
-async function startServer(): Promise<void> {
-  try {
-    await getDatabase()
-    console.log('Database initialized')
-    
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`)
-      console.log(`📡 API endpoint: http://localhost:${PORT}/api`)
-      console.log(`📋 Menu API: http://localhost:${PORT}/api/menu`)
-      console.log(`📦 Orders API: http://localhost:${PORT}/api/orders`)
-      console.log(`💡 First run: npm run init-db to insert mock data`)
-    })
-  } catch (error) {
-    console.error('Failed to start server:', error)
-    process.exit(1)
-  }
-}
-
-startServer()
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`)
+  console.log(`📡 API endpoint: http://localhost:${PORT}/api`)
+  console.log(`📋 Menu API: http://localhost:${PORT}/api/menu`)
+  console.log(`📦 Orders API: http://localhost:${PORT}/api/orders`)
+  console.log(`💡 First run: npm run init-db to initialize database`)
+})

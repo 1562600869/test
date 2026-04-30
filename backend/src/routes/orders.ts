@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { getDatabase, saveDatabase, Database } from '../config/database'
+import { getDatabase, Database } from '../config/database'
 
 const router = Router()
 const TAX_RATE = 0.1
@@ -36,112 +36,46 @@ function generateOrderNumber(): string {
   return `ORD${year}${month}${day}${random}`
 }
 
-function getCurrentTimestamp(): string {
-  return new Date().toISOString()
-}
-
-function mapOrderItem(row: Record<string, any>): OrderItem {
+function mapOrderItem(row: any): OrderItem {
   return {
-    id: Number(row.id),
-    order_id: Number(row.order_id),
-    menu_item_id: Number(row.menu_item_id),
-    menu_item_name: String(row.menu_item_name),
-    quantity: Number(row.quantity),
-    price: Number(row.price),
-    subtotal: Number(row.subtotal),
-    created_at: String(row.created_at)
+    id: row.id,
+    order_id: row.order_id,
+    menu_item_id: row.menu_item_id,
+    menu_item_name: row.menu_item_name,
+    quantity: row.quantity,
+    price: row.price,
+    subtotal: row.subtotal,
+    created_at: row.created_at
   }
 }
 
-function mapOrder(row: Record<string, any>, items?: OrderItem[]): Order {
+function mapOrder(row: any, items?: OrderItem[]): Order {
   return {
-    id: Number(row.id),
-    order_number: String(row.order_number),
-    status: String(row.status),
-    subtotal: Number(row.subtotal),
-    tax_amount: Number(row.tax_amount),
-    total_amount: Number(row.total_amount),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
+    id: row.id,
+    order_number: row.order_number,
+    status: row.status,
+    subtotal: row.subtotal,
+    tax_amount: row.tax_amount,
+    total_amount: row.total_amount,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
     items: items
   }
 }
 
-function queryOneOrder(db: Database, sql: string, params: any[] = []): Record<string, any> | null {
-  const stmt = db.prepare(sql)
-  
-  if (params.length > 0) {
-    stmt.bind(params)
-  }
-  
-  if (stmt.step()) {
-    const row = stmt.getAsObject()
-    stmt.free()
-    return row
-  }
-  
-  stmt.free()
-  return null
-}
-
-function queryAllOrders(db: Database, sql: string, params: any[] = []): Record<string, any>[] {
-  const result: Record<string, any>[] = []
-  const stmt = db.prepare(sql)
-  
-  if (params.length > 0) {
-    stmt.bind(params)
-  }
-  
-  while (stmt.step()) {
-    const row = stmt.getAsObject()
-    result.push(row)
-  }
-  stmt.free()
-  
-  return result
-}
-
-function queryOrderItems(db: Database, orderId: number): OrderItem[] {
-  const items: OrderItem[] = []
-  const stmt = db.prepare('SELECT * FROM order_items WHERE order_id = ?')
-  stmt.bind([orderId])
-  
-  while (stmt.step()) {
-    const row = stmt.getAsObject()
-    items.push(mapOrderItem(row))
-  }
-  stmt.free()
-  
-  return items
-}
-
-function runSql(db: Database, sql: string, params: any[] = []): void {
-  const stmt = db.prepare(sql)
-  if (params.length > 0) {
-    stmt.bind(params)
-  }
-  stmt.step()
-  stmt.free()
-}
-
-function getLastInsertId(db: Database): number {
-  const result = db.exec('SELECT last_insert_rowid() as id')
-  if (result.length > 0 && result[0].values.length > 0) {
-    return Number(result[0].values[0][0])
-  }
-  return 0
-}
-
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', (req: Request, res: Response) => {
   try {
-    const db = await getDatabase()
-    const orders = queryAllOrders(db, 'SELECT * FROM orders ORDER BY created_at DESC')
+    const db = getDatabase()
+    const orderStmt = db.prepare('SELECT * FROM orders ORDER BY created_at DESC')
+    const orders = orderStmt.all() as any[]
+    const itemStmt = db.prepare('SELECT * FROM order_items WHERE order_id = ?')
 
     const result = orders.map(order => {
-      const items = queryOrderItems(db, Number(order.id))
+      const items = itemStmt.all(order.id).map(mapOrderItem)
       return mapOrder(order, items)
     })
 
+    db.close()
     res.json(result)
   } catch (error) {
     console.error('Error fetching orders:', error)
@@ -149,23 +83,27 @@ router.get('/', async (req: Request, res: Response) => {
   }
 })
 
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10)
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid order ID' })
     }
 
-    const db = await getDatabase()
-    const order = queryOneOrder(db, 'SELECT * FROM orders WHERE id = ?', [id])
+    const db = getDatabase()
+    const orderStmt = db.prepare('SELECT * FROM orders WHERE id = ?')
+    const order = orderStmt.get(id) as any
 
     if (!order) {
+      db.close()
       return res.status(404).json({ error: 'Order not found' })
     }
 
-    const items = queryOrderItems(db, id)
-    const result = mapOrder(order, items)
+    const itemStmt = db.prepare('SELECT * FROM order_items WHERE order_id = ?')
+    const items = itemStmt.all(id).map(mapOrderItem)
 
+    const result = mapOrder(order, items)
+    db.close()
     res.json(result)
   } catch (error) {
     console.error('Error fetching order:', error)
@@ -173,7 +111,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 })
 
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', (req: Request, res: Response) => {
   try {
     const { items } = req.body as { items: { menuItemId: number; quantity: number }[] }
 
@@ -181,87 +119,90 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Order items are required' })
     }
 
-    const db = await getDatabase()
+    const db = getDatabase()
 
-    let subtotal = 0
-    const orderItems: { menuItemId: number; quantity: number; price: number; name: string; stock: number; status: string }[] = []
+    const createOrder = db.transaction(() => {
+      let subtotal = 0
+      const menuItemStmt = db.prepare('SELECT * FROM menu_items WHERE id = ?')
+      const orderItems: { menuItemId: number; quantity: number; price: number; name: string }[] = []
 
-    for (const item of items) {
-      const menuItem = queryOneOrder(db, 'SELECT * FROM menu_items WHERE id = ?', [item.menuItemId])
-      
-      if (!menuItem) {
-        return res.status(400).json({ error: `Menu item ${item.menuItemId} not found` })
-      }
-      
-      const stock = Number(menuItem.stock)
-      const status = String(menuItem.status)
-      
-      if (stock < item.quantity) {
-        return res.status(400).json({ error: `Insufficient stock for ${menuItem.name}` })
-      }
-      if (status === 'sold_out') {
-        return res.status(400).json({ error: `${menuItem.name} is sold out` })
-      }
+      for (const item of items) {
+        const menuItem = menuItemStmt.get(item.menuItemId) as any
+        if (!menuItem) {
+          throw new Error(`Menu item ${item.menuItemId} not found`)
+        }
+        if (menuItem.stock < item.quantity) {
+          throw new Error(`Insufficient stock for ${menuItem.name}`)
+        }
+        if (menuItem.status === 'sold_out') {
+          throw new Error(`${menuItem.name} is sold out`)
+        }
 
-      const itemSubtotal = Number(menuItem.price) * item.quantity
-      subtotal += itemSubtotal
-      orderItems.push({
-        menuItemId: Number(menuItem.id),
-        quantity: item.quantity,
-        price: Number(menuItem.price),
-        name: String(menuItem.name),
-        stock: stock,
-        status: status
-      })
-    }
-
-    const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100
-    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100
-    const orderNumber = generateOrderNumber()
-    const now = getCurrentTimestamp()
-
-    runSql(db, `
-      INSERT INTO orders (order_number, status, subtotal, tax_amount, total_amount, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [orderNumber, 'pending', subtotal, taxAmount, totalAmount, now, now])
-
-    const orderId = getLastInsertId(db)
-
-    for (const item of orderItems) {
-      const itemSubtotal = item.price * item.quantity
-      runSql(db, `
-        INSERT INTO order_items (order_id, menu_item_id, menu_item_name, quantity, price, subtotal, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [orderId, item.menuItemId, item.name, item.quantity, item.price, itemSubtotal, now])
-
-      const newStock = item.stock - item.quantity
-      let newStatus = item.status
-      if (newStock === 0) {
-        newStatus = 'sold_out'
-      } else if (newStock <= 5) {
-        newStatus = 'low_stock'
+        const itemSubtotal = menuItem.price * item.quantity
+        subtotal += itemSubtotal
+        orderItems.push({
+          menuItemId: menuItem.id,
+          quantity: item.quantity,
+          price: menuItem.price,
+          name: menuItem.name
+        })
       }
 
-      runSql(db, `
+      const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100
+      const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100
+      const orderNumber = generateOrderNumber()
+
+      const insertOrderStmt = db.prepare(`
+        INSERT INTO orders (order_number, status, subtotal, tax_amount, total_amount)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const orderResult = insertOrderStmt.run(orderNumber, 'pending', subtotal, taxAmount, totalAmount)
+      const orderId = orderResult.lastInsertRowid as number
+
+      const insertItemStmt = db.prepare(`
+        INSERT INTO order_items (order_id, menu_item_id, menu_item_name, quantity, price, subtotal)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+
+      const updateStockStmt = db.prepare(`
         UPDATE menu_items 
-        SET stock = ?, status = ?, updated_at = ?
+        SET stock = stock - ?, 
+            status = CASE 
+              WHEN stock - ? = 0 THEN 'sold_out'
+              WHEN stock - ? <= 5 THEN 'low_stock'
+              ELSE status
+            END,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `, [newStock, newStatus, now, item.menuItemId])
-    }
+      `)
 
-    const order = queryOneOrder(db, 'SELECT * FROM orders WHERE id = ?', [orderId])
-    const orderItemsResult = queryOrderItems(db, orderId)
-    const result = mapOrder(order!, orderItemsResult)
+      for (const item of orderItems) {
+        const itemSubtotal = item.price * item.quantity
+        insertItemStmt.run(orderId, item.menuItemId, item.name, item.quantity, item.price, itemSubtotal)
+        updateStockStmt.run(item.quantity, item.quantity, item.quantity, item.menuItemId)
+      }
 
-    saveDatabase(db)
+      const selectOrderStmt = db.prepare('SELECT * FROM orders WHERE id = ?')
+      const order = selectOrderStmt.get(orderId) as any
+      const selectItemsStmt = db.prepare('SELECT * FROM order_items WHERE order_id = ?')
+      const orderItemsResult = selectItemsStmt.all(orderId).map(mapOrderItem)
+
+      return mapOrder(order, orderItemsResult)
+    })
+
+    const result = createOrder()
+    db.close()
     res.status(201).json(result)
   } catch (error: any) {
     console.error('Error creating order:', error)
+    if (error.message && (error.message.includes('not found') || error.message.includes('Insufficient') || error.message.includes('sold out'))) {
+      return res.status(400).json({ error: error.message })
+    }
     res.status(500).json({ error: 'Failed to create order' })
   }
 })
 
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10)
     if (isNaN(id)) {
@@ -275,21 +216,28 @@ router.put('/:id', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid order status' })
     }
 
-    const db = await getDatabase()
-    const existingOrder = queryOneOrder(db, 'SELECT * FROM orders WHERE id = ?', [id])
+    const db = getDatabase()
+    const selectStmt = db.prepare('SELECT * FROM orders WHERE id = ?')
+    const existingOrder = selectStmt.get(id) as any
 
     if (!existingOrder) {
+      db.close()
       return res.status(404).json({ error: 'Order not found' })
     }
 
-    const now = getCurrentTimestamp()
-    runSql(db, 'UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', [status, now, id])
+    const updateStmt = db.prepare(`
+      UPDATE orders 
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `)
+    updateStmt.run(status, id)
 
-    const order = queryOneOrder(db, 'SELECT * FROM orders WHERE id = ?', [id])
-    const items = queryOrderItems(db, id)
-    const result = mapOrder(order!, items)
+    const order = selectStmt.get(id) as any
+    const itemStmt = db.prepare('SELECT * FROM order_items WHERE order_id = ?')
+    const items = itemStmt.all(id).map(mapOrderItem)
 
-    saveDatabase(db)
+    const result = mapOrder(order, items)
+    db.close()
     res.json(result)
   } catch (error) {
     console.error('Error updating order:', error)

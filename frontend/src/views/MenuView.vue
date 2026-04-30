@@ -25,7 +25,7 @@
 
     <div class="menu-grid">
       <div 
-        v-for="item in filteredMenuItems" 
+        v-for="item in displayItems" 
         :key="item.id"
         @click="openDetail(item)"
       >
@@ -36,8 +36,12 @@
       </div>
     </div>
 
-    <div v-if="filteredMenuItems.length === 0" class="empty-result">
+    <div v-if="displayItems.length === 0 && !loading" class="empty-result">
       <p>没有找到匹配的菜品</p>
+    </div>
+
+    <div v-if="loading" class="empty-result">
+      <p>搜索中...</p>
     </div>
 
     <button v-if="cartItemCount > 0" class="cart-float-btn" @click="openCart">
@@ -61,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useCartStore } from '@/store/cart'
 import { storeToRefs } from 'pinia'
 import { menuApi } from '@/api'
@@ -71,31 +75,33 @@ import MenuDetailModal from '@/components/MenuDetailModal.vue'
 import CartSidebar from '@/components/CartSidebar.vue'
 
 const menuItems = ref<MenuItem[]>([])
+const searchResults = ref<MenuItem[]>([])
 const categories = ref<string[]>(['全部'])
 const searchKeyword = ref('')
 const selectedCategory = ref('全部')
 const isDetailModalOpen = ref(false)
 const selectedMenuItem = ref<MenuItem | null>(null)
 const isCartOpen = ref(false)
+const loading = ref(false)
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 const cartStore = useCartStore()
 const { itemCount: cartItemCount, totalAmount: cartTotal } = storeToRefs(cartStore)
 
-const filteredMenuItems = computed(() => {
-  let items = menuItems.value
+const hasSearchKeyword = computed(() => {
+  return searchKeyword.value.trim() !== ''
+})
 
+const displayItems = computed(() => {
+  if (hasSearchKeyword.value) {
+    return searchResults.value
+  }
+  
+  let items = menuItems.value
   if (selectedCategory.value !== '全部') {
     items = items.filter(item => item.category === selectedCategory.value)
   }
-
-  if (searchKeyword.value.trim()) {
-    const keyword = searchKeyword.value.toLowerCase().trim()
-    items = items.filter(item => 
-      item.name.toLowerCase().includes(keyword) ||
-      item.description.toLowerCase().includes(keyword)
-    )
-  }
-
   return items
 })
 
@@ -115,10 +121,49 @@ async function loadCategories(): Promise<void> {
 
 function selectCategory(category: string): void {
   selectedCategory.value = category
+  searchKeyword.value = ''
+  searchResults.value = []
+}
+
+async function executeSearch(): Promise<void> {
+  const keyword = searchKeyword.value.trim()
+  
+  if (!keyword) {
+    searchResults.value = []
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await menuApi.search(keyword)
+    if (result.success && result.data) {
+      searchResults.value = result.data
+    } else {
+      searchResults.value = []
+    }
+  } catch (error) {
+    console.error('Search error:', error)
+    searchResults.value = []
+  } finally {
+    loading.value = false
+  }
 }
 
 function handleSearch(): void {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+  }
+
+  searchTimer = setTimeout(() => {
+    executeSearch()
+  }, 300)
 }
+
+watch(searchKeyword, (newVal) => {
+  if (newVal.trim() === '') {
+    searchResults.value = []
+  }
+})
 
 function openDetail(item: MenuItem): void {
   selectedMenuItem.value = item

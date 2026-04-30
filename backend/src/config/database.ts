@@ -1,9 +1,7 @@
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import Database from 'better-sqlite3'
 import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { existsSync, mkdirSync } from 'fs'
 
-let dbInstance: SqlJsDatabase | null = null
 const DB_PATH = join(__dirname, '../../../database/restaurant.db')
 
 function ensureDbDir(): void {
@@ -13,29 +11,12 @@ function ensureDbDir(): void {
   }
 }
 
-export async function getDatabase(): Promise<SqlJsDatabase> {
-  if (dbInstance) {
-    return dbInstance
-  }
-
-  const SQL = await initSqlJs()
+export function getDatabase(): Database.Database {
   ensureDbDir()
-
-  if (existsSync(DB_PATH)) {
-    const fileBuffer = readFileSync(DB_PATH)
-    dbInstance = new SQL.Database(fileBuffer)
-  } else {
-    dbInstance = new SQL.Database()
-  }
-
-  return dbInstance
+  const db = new Database(DB_PATH)
+  db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
+  return db
 }
 
-export function saveDatabase(db: SqlJsDatabase): void {
-  ensureDbDir()
-  const data = db.export()
-  const buffer = Buffer.from(data)
-  writeFileSync(DB_PATH, buffer)
-}
-
-export { SqlJsDatabase as Database }
+export { Database }
